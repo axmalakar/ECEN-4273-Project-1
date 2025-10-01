@@ -198,9 +198,9 @@ def main():
 
     # Define cutscene slides (use your own PNGs in /assets or rely on bg colors)
     slides = [
-        Slide("It was supposed to be a quiet night at the Grand Royale…", duration=3.0, image_name="slide1.png", bg_color=(20,20,35)),
-        Slide("Until someone rigged the slots. You’ll need proof—and a lot of chips.", duration=0, image_name="slide2.png", bg_color=(25,18,18)),
-        Slide("Find the culprit. Don’t go broke. The house always wins… unless you do.", duration=3.5, image_name=None, bg_color=(10,10,10)),
+        Slide("Jim just lost all of his money playing blackjack", duration=3.0, image_name="Image1.png", bg_color=(20,20,35)),
+        Slide("Jim is very sad because he has no money and lost his wife.", duration=0, image_name="Image2.png", bg_color=(25,18,18)),
+        Slide("Help Jim overcome his fear of rejection and win hella bread.", duration=3.5, image_name="Image3.png", bg_color=(10,10,10)),
     ]
     cutscene = Cutscene(slides, font)
     state = GameState.MENU
