@@ -1,0 +1,810 @@
+# py_openworld_casino_v2.py
+# Open-world (top-down) with NPCs + casino blackjack (sprites, split, double)
+import sys, os, random, pygame
+
+# ============ Config ============
+WIN_W, WIN_H = 1024, 576
+FPS = 60
+TILE = 32
+
+# World size (bigger map)
+WORLD_W, WORLD_H = 96, 72  # tiles
+
+PLAYER_SPEED = 3.2
+NPC_SPEED = 1.4
+NPC_COUNT = 8
+
+# Colors
+TABLE_COLOR = (7, 105, 57)
+BG_COLOR = (18, 18, 22)
+GOLD = (240, 200, 60)
+WHITE = (245, 245, 245)
+RED = (220, 60, 60)
+BLACK = (0, 0, 0)
+ACCENT = (160, 90, 255)
+FLOOR = (42, 50, 60)
+WALL = (24, 28, 34)
+GRASS = (34, 72, 44)
+ROAD = (64, 64, 64)
+NEON = (120, 40, 140)
+SAND = (162, 132, 96)
+WATER = (60, 110, 160)
+
+# Blackjack
+STARTING_BANKROLL = 300
+MIN_BET = 10
+MAX_BET = 500
+NUM_DECKS = 6
+
+# Assets
+MUSIC_FILE = "lobby_music.mp3"
+CARDS_DIR = "cards"
+CARD_W, CARD_H = 80, 112
+
+# ============ Pygame init ============
+pygame.init()
+pygame.display.set_caption("Open-World Casino v2 (Top-Down + NPCs + Split/Double)")
+screen = pygame.display.set_mode((WIN_W, WIN_H))
+clock = pygame.time.Clock()
+
+try:
+    pygame.mixer.init()
+    MUSIC_ENABLED = True
+except pygame.error:
+    MUSIC_ENABLED = False
+
+FONT_BIG = pygame.font.SysFont("arialblack", 40)
+FONT_HUD = pygame.font.SysFont("arial", 22, bold=True)
+FONT = pygame.font.SysFont("arial", 20)
+FONT_SMALL = pygame.font.SysFont("arial", 16)
+
+# ============ Blackjack core ============
+SUITS = ["♠", "♥", "♦", "♣"]
+RANKS = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
+VALUES = {**{str(i): i for i in range(2, 11)}, "J":10, "Q":10, "K":10, "A":11}
+SUIT_LETTER = {"♠":"S","♥":"H","♦":"D","♣":"C"}
+
+def build_shoe(num_decks=6):
+    shoe = []
+    for _ in range(num_decks):
+        for s in SUITS:
+            for r in RANKS:
+                shoe.append((r,s))
+    random.shuffle(shoe)
+    return shoe
+
+def hand_total(cards):
+    t, aces = 0, 0
+    for r,_ in cards:
+        t += VALUES[r]
+        if r == "A":
+            aces += 1
+    while t > 21 and aces:
+        t -= 10; aces -= 1
+    return t
+
+def is_blackjack(cards): return len(cards) == 2 and hand_total(cards) == 21
+def is_bust(cards): return hand_total(cards) > 21
+
+def same_rank(c1, c2):
+    return c1[0] == c2[0]
+
+# ============ Card sprites (fallback-safe) ============
+CARD_IMAGES = {}
+CARD_BACK = None
+SPRITES_OK = False
+
+def try_load_image(path, size=None):
+    img = pygame.image.load(path).convert_alpha()
+    if size:
+        img = pygame.transform.smoothscale(img, size)
+    return img
+
+def load_card_sprites():
+    global SPRITES_OK, CARD_BACK, CARD_IMAGES
+    if not os.path.isdir(CARDS_DIR):
+        SPRITES_OK = False; return
+    try:
+        CARD_BACK = try_load_image(os.path.join(CARDS_DIR, "back.png"), (CARD_W, CARD_H))
+        for r in RANKS:
+            for s in SUITS:
+                name = f"{r}{SUIT_LETTER[s]}.png"
+                CARD_IMAGES[(r,s)] = try_load_image(os.path.join(CARDS_DIR, name), (CARD_W, CARD_H))
+        SPRITES_OK = (len(CARD_IMAGES) == 52 and CARD_BACK is not None)
+    except Exception:
+        SPRITES_OK = False
+
+load_card_sprites()
+
+def draw_card(surface, x, y, r, s, face_up=True):
+    if SPRITES_OK:
+        surface.blit(CARD_BACK if not face_up else CARD_IMAGES[(r,s)], (x,y))
+    else:
+        rect = pygame.Rect(x,y,CARD_W,CARD_H)
+        if face_up:
+            pygame.draw.rect(surface, WHITE, rect, border_radius=10)
+            pygame.draw.rect(surface, BLACK, rect, 2, border_radius=10)
+            col = RED if s in ("♥","♦") else BLACK
+            surface.blit(FONT_SMALL.render(r, True, col), (x+8, y+6))
+            surface.blit(FONT.render(s, True, col), (x+CARD_W//2-6, y+CARD_H//2-12))
+            surface.blit(FONT_SMALL.render(r, True, col), (x+CARD_W-18, y+CARD_H-22))
+        else:
+            pygame.draw.rect(surface, (30,60,130), rect, border_radius=10)
+            pygame.draw.rect(surface, WHITE, rect, 3, border_radius=10)
+            pygame.draw.circle(surface, (200,220,255), (x+CARD_W//2, y+CARD_H//2), 18)
+
+# ============ World map generation ============
+# Tiles:
+# ' ' grass, '.' road, '#' wall/building, '=' water, '~' sand, 'C' casino door outside,
+# 'H' hotel door, 'S' shop door, 'P' park statue,
+# For simplicity: buildings are solid '#', special letters are interactives at their tile.
+WORLD_MAP = [[ ' ' for _ in range(WORLD_W)] for __ in range(WORLD_H)]
+
+# Border walls
+for y in range(WORLD_H):
+    for x in range(WORLD_W):
+        if y in (0, WORLD_H-1) or x in (0, WORLD_W-1):
+            WORLD_MAP[y][x] = '#'
+
+# Main road (horizontal & vertical)
+for x in range(4, WORLD_W-4):
+    WORLD_MAP[WORLD_H//2][x] = '.'
+for y in range(6, WORLD_H-6):
+    WORLD_MAP[y][WORLD_W//3] = '.'
+
+# Lake + beach
+for y in range(10, 20):
+    for x in range(10, 22):
+        WORLD_MAP[y][x] = '=' if (x-16)**2 + (y-15)**2 < 36 else WORLD_MAP[y][x]
+for y in range(9, 21):
+    for x in range(9, 23):
+        if WORLD_MAP[y][x] == ' ' and (x-16)**2 + (y-15)**2 < 64:
+            WORLD_MAP[y][x] = '~'
+
+# Park statue
+WORLD_MAP[WORLD_H//2 - 6][WORLD_W//3 + 5] = 'P'
+
+# Casino block with door 'C'
+cx, cy = WORLD_W - 26, 12
+for yy in range(cy, cy+10):
+    for xx in range(cx-8, cx+8):
+        WORLD_MAP[yy][xx] = '#'
+WORLD_MAP[cy+9][cx] = 'C'       # outside door
+WORLD_MAP[cy+10][cx] = '.'      # sidewalk
+
+# Hotel block 'H'
+hx, hy = 20, 40
+for yy in range(hy, hy+9):
+    for xx in range(hx-8, hx+8):
+        WORLD_MAP[yy][xx] = '#'
+WORLD_MAP[hy+9][hx] = 'H'
+WORLD_MAP[hy+10][hx] = '.'
+
+# Shop block 'S'
+sx, sy = WORLD_W//2, 18
+for yy in range(sy, sy+8):
+    for xx in range(sx-7, sx+7):
+        WORLD_MAP[yy][xx] = '#'
+WORLD_MAP[sy+8][sx] = 'S'
+WORLD_MAP[sy+9][sx] = '.'
+
+def is_solid(tile): return tile == '#'
+
+# ============ Interior: Casino ============
+CASINO_W, CASINO_H = 32, 22
+CASINO_MAP = [['#' if y in (0,CASINO_H-1) or x in (0,CASINO_W-1) else FLOOR for x in range(CASINO_W)] for y in range(CASINO_H)]
+# Exit line bottom-center
+CASINO_MAP[CASINO_H-1][CASINO_W//2] = '.'
+# Two blackjack tables (interaction 'T')
+tbl_a = (CASINO_W//3, CASINO_H//2)
+tbl_b = (2*CASINO_W//3, CASINO_H//2)
+CASINO_MAP[tbl_a[1]][tbl_a[0]] = 'T'
+CASINO_MAP[tbl_b[1]][tbl_b[0]] = 'T'
+
+# ============ Player & NPC sprites ============
+def load_or_build_sprite(path, size=(28, 30), color=(60,170,255)):
+    if os.path.exists(path):
+        return try_load_image(path, size)
+    # build a tiny person sprite (front-facing)
+    w,h = size
+    surf = pygame.Surface((w,h), pygame.SRCALPHA)
+    # outline
+    pygame.draw.rect(surf, BLACK, (0,0,w,h), 2, border_radius=6)
+    # body
+    pygame.draw.rect(surf, color, (4,6,w-8,h-10), border_radius=6)
+    # head
+    pygame.draw.circle(surf, (255,224,189), (w//2, 6), 6)
+    # feet
+    pygame.draw.rect(surf, BLACK, (5,h-6,6,4), border_radius=2)
+    pygame.draw.rect(surf, BLACK, (w-11,h-6,6,4), border_radius=2)
+    return surf
+
+PLAYER_SPRITE = load_or_build_sprite("player.png", (28,30))
+NPC1_SPRITE = load_or_build_sprite("npc1.png", (26,28), color=(220,120,90))
+NPC2_SPRITE = load_or_build_sprite("npc2.png", (26,28), color=(120,200,110))
+NPC_SPRITES = [NPC1_SPRITE, NPC2_SPRITE]
+
+# ============ Entities ============
+class Actor:
+    def __init__(self, x, y, w, h, sprite):
+        self.x, self.y = x, y
+        self.w, self.h = w, h
+        self.sprite = sprite
+        self.vx = self.vy = 0.0
+
+    @property
+    def rect(self):
+        return pygame.Rect(int(self.x), int(self.y), self.w, self.h)
+
+    def move_and_collide(self, tilemap, speed_scale=1.0):
+        # horizontal
+        nx = self.x + self.vx * speed_scale
+        if not self.collides_at(nx, self.y, tilemap):
+            self.x = nx
+        # vertical
+        ny = self.y + self.vy * speed_scale
+        if not self.collides_at(self.x, ny, tilemap):
+            self.y = ny
+
+    def collides_at(self, px, py, tilemap):
+        rect = pygame.Rect(int(px), int(py), self.w, self.h)
+        tx0, ty0 = rect.left//TILE, rect.top//TILE
+        tx1, ty1 = rect.right//TILE, rect.bottom//TILE
+        h = len(tilemap); w = len(tilemap[0])
+        for ty in range(max(0,ty0), min(h, ty1+1)):
+            for tx in range(max(0,tx0), min(w, tx1+1)):
+                t = tilemap[ty][tx]
+                if is_solid(t):
+                    if rect.colliderect(pygame.Rect(tx*TILE, ty*TILE, TILE, TILE)):
+                        return True
+        return False
+
+    def draw(self, surf, camx, camy):
+        surf.blit(self.sprite, (self.x - camx, self.y - camy))
+
+class Player(Actor):
+    def input_move(self):
+        keys = pygame.key.get_pressed()
+        vx = (keys[pygame.K_RIGHT] or keys[pygame.K_d]) - (keys[pygame.K_LEFT] or keys[pygame.K_a])
+        vy = (keys[pygame.K_DOWN]  or keys[pygame.K_s]) - (keys[pygame.K_UP]   or keys[pygame.K_w])
+        if vx and vy: vx *= 0.7071; vy *= 0.7071
+        self.vx, self.vy = vx*PLAYER_SPEED, vy*PLAYER_SPEED
+
+class NPC(Actor):
+    def __init__(self, x, y, sprite, name, lines):
+        super().__init__(x, y, sprite.get_width(), sprite.get_height(), sprite)
+        self.name = name
+        self.lines = lines
+        self.dialog_idx = 0
+        self.timer = random.randint(30, 120)
+        self.dir = random.choice([(1,0),(-1,0),(0,1),(0,-1),(0,0)])
+
+    def think(self, tilemap):
+        self.timer -= 1
+        if self.timer <= 0:
+            self.timer = random.randint(30, 160)
+            self.dir = random.choice([(1,0),(-1,0),(0,1),(0,-1),(0,0)])
+        self.vx, self.vy = self.dir[0]*NPC_SPEED, self.dir[1]*NPC_SPEED
+        self.move_and_collide(tilemap, 1.0)
+
+    def talk(self):
+        text = self.lines[self.dialog_idx % len(self.lines)]
+        self.dialog_idx += 1
+        return f"{self.name}: {text}"
+
+# Populate NPCs outside
+def random_walkable_tile():
+    while True:
+        x = random.randint(2, WORLD_W-3)
+        y = random.randint(2, WORLD_H-3)
+        if WORLD_MAP[y][x] in (' ', '.', '~'):
+            return x, y
+
+NPCS = []
+for i in range(NPC_COUNT):
+    tx, ty = random_walkable_tile()
+    sprite = random.choice(NPC_SPRITES)
+    name = random.choice(["Sam","Lina","Omar","Maya","Ben","Ava","Huss","Noor"])
+    lines = random.choice([
+        ["Nice weather today.", "Heard the casino is busy.", "Do you collect card skins?"],
+        ["I always split eights.", "Double on 11—no fear.", "Dealer’s hot tonight."],
+        ["You can fish at the lake.", "Shop sells nothing… yet.", "Hotel’s fully booked."],
+        ["I had a dream of aces.", "Green felt is lucky.", "Don’t chase losses."]
+    ])
+    NPCS.append(NPC(tx*TILE, ty*TILE, sprite, name, lines))
+
+# ============ Casino interior player ============
+INSIDE_PLAYER = Player((CASINO_W//2)*TILE, (CASINO_H-3)*TILE)
+INSIDE_PLAYER.sprite = PLAYER_SPRITE
+
+# ============ Blackjack Table with Split/Double ============
+def point_in_rect(pos, rect):
+    return rect and pygame.Rect(rect).collidepoint(pos)
+
+def draw_button(surf, rect, label, enabled=True):
+    x,y,w,h = rect
+    color = ACCENT if enabled else (80,80,90)
+    pygame.draw.rect(surf, color, rect, border_radius=10)
+    pygame.draw.rect(surf, (255,255,255), rect, 2, border_radius=10)
+    txt = FONT_HUD.render(label, True, WHITE if enabled else (200,200,200))
+    surf.blit(txt, (x + (w-txt.get_width())//2, y + (h-txt.get_height())//2))
+    return rect if enabled else None
+
+def draw_center_text(surf, text, center, color=WHITE):
+    t = FONT.render(text, True, color)
+    surf.blit(t, (center[0]-t.get_width()//2, center[1]-t.get_height()//2))
+
+class BlackjackTable:
+    def __init__(self):
+        self.bankroll = STARTING_BANKROLL
+        self.base_bet = MIN_BET
+        self.shoe = build_shoe(NUM_DECKS)
+        self.message = ""
+        self.phase = "betting"  # betting, dealing, player, dealer, settle, done
+        # support split: player_hands is list of dicts {cards, bet, doubled, stood, finished}
+        self.player_hands = []
+        self.active_i = 0
+        self.dealer = []
+        self.revealed = False
+        self.anim = []
+
+    def reshoe(self):
+        if len(self.shoe) < 20:
+            self.shoe = build_shoe(NUM_DECKS)
+
+    def card_to(self, who, idx, hand_i=0):
+        # positions for hands
+        if who == "dealer":
+            return (140 + idx*(CARD_W+10), 100)
+        else:
+            row_y = 360 + hand_i*130  # multiple rows if split
+            return (140 + idx*(CARD_W+10), row_y)
+
+    def start_hand(self):
+        self.message=""
+        self.player_hands = [dict(cards=[], bet=self.base_bet, doubled=False, stood=False, finished=False)]
+        self.active_i = 0
+        self.dealer=[]; self.revealed=False
+        self.phase="dealing"; self.anim=[]
+        self.reshoe()
+
+        order = [("player",0,0),("dealer",0,0),("player",1,0),("dealer",1,0)]
+        t=0
+        for who, idx, hi in order:
+            self.anim.append({
+                "who": who, "idx": idx, "hand_i": hi,
+                "t_start": pygame.time.get_ticks()+t,
+                "from": (WIN_W//2, -140),
+                "to": self.card_to(who, idx, hi if who=="player" else 0),
+                "arrived": False,
+                "card": self.shoe.pop()
+            })
+            t += 220
+
+    def update_deal_anim(self):
+        now = pygame.time.get_ticks()
+        moving=False
+        for a in self.anim:
+            if a["arrived"] or now < a["t_start"]: continue
+            dt = (now - a["t_start"])/220.0
+            if dt >= 1.0:
+                a["arrived"] = True
+                if a["who"] == "dealer":
+                    self.dealer.append(a["card"])
+                else:
+                    self.player_hands[a["hand_i"]]["cards"].append(a["card"])
+            else:
+                moving=True
+        self.anim = [x for x in self.anim if not x["arrived"] or now < x["t_start"]]
+        if not moving and all(x["arrived"] or now>=x["t_start"] for x in self.anim):
+            self.anim.clear()
+            # check naturals (if split not yet)
+            p = self.player_hands[0]["cards"]
+            if is_blackjack(p) or is_blackjack(self.dealer):
+                self.phase = "settle"; self.revealed=True
+            else:
+                self.phase = "player"
+
+    # --- Actions ---
+    def can_double(self, hand):
+        return (len(hand["cards"]) == 2) and (self.bankroll >= hand["bet"]) and (not hand["doubled"])
+
+    def can_split(self, hand):
+        c = hand["cards"]
+        return (len(c) == 2) and same_rank(c[0], c[1]) and (self.bankroll >= hand["bet"])
+
+    def hit(self):
+        h = self.player_hands[self.active_i]
+        h["cards"].append(self.shoe.pop()); self.reshoe()
+        if is_bust(h["cards"]):
+            h["finished"] = True
+            self.next_hand_or_dealer()
+
+    def stand(self):
+        h = self.player_hands[self.active_i]
+        h["stood"] = True
+        h["finished"] = True
+        self.next_hand_or_dealer()
+
+    def double(self):
+        h = self.player_hands[self.active_i]
+        if not self.can_double(h): return
+        # take extra bet
+        self.bankroll -= h["bet"]
+        h["bet"] *= 2
+        h["doubled"] = True
+        # one card then stand
+        h["cards"].append(self.shoe.pop()); self.reshoe()
+        h["stood"] = True
+        h["finished"] = True
+        if is_bust(h["cards"]):
+            pass
+        self.next_hand_or_dealer()
+
+    def split(self):
+        h = self.player_hands[self.active_i]
+        if not self.can_split(h): return
+        c0, c1 = h["cards"][0], h["cards"][1]
+        # create two hands
+        h["cards"] = [c0]
+        new_hand = dict(cards=[c1], bet=h["bet"], doubled=False, stood=False, finished=False)
+        # take additional bet from bankroll
+        self.bankroll -= h["bet"]
+        # deal one card to each hand
+        h["cards"].append(self.shoe.pop())
+        new_hand["cards"].append(self.shoe.pop())
+        # append new hand AFTER current active hand, we’ll play active first then next
+        self.player_hands.insert(self.active_i+1, new_hand)
+        self.reshoe()
+
+    def next_hand_or_dealer(self):
+        # move to next unfinished hand
+        for i in range(self.active_i+1, len(self.player_hands)):
+            if not self.player_hands[i]["finished"]:
+                self.active_i = i
+                return
+        # else check earlier ones
+        for i in range(0, self.active_i+1):
+            if not self.player_hands[i]["finished"]:
+                self.active_i = i
+                return
+        # all done -> dealer plays
+        self.phase = "dealer"
+
+    # --- Dealer & settle ---
+    def dealer_play(self):
+        while hand_total(self.dealer) < 17:
+            pygame.time.delay(250)
+            self.dealer.append(self.shoe.pop()); self.reshoe()
+
+    def settle(self):
+        msgs = []
+        dealer_t = hand_total(self.dealer)
+        dealer_bust = dealer_t > 21
+        for h in self.player_hands:
+            pt = hand_total(h["cards"])
+            bet = h["bet"]
+            # natural blackjack special case: only valid if not from split
+            natural = (len(h["cards"]) == 2 and pt == 21 and len(self.player_hands) == 1 and not h["doubled"])
+            if natural and is_blackjack(self.dealer):
+                msgs.append("Push (both blackjack).")
+                delta = 0
+            elif natural:
+                win = int(bet * 1.5)
+                msgs.append(f"Blackjack! +${win}")
+                delta = win
+            else:
+                if pt > 21:
+                    msgs.append(f"Bust −${bet}")
+                    delta = -bet
+                elif dealer_bust:
+                    msgs.append(f"Dealer busts +${bet}")
+                    delta = bet
+                else:
+                    if pt > dealer_t:
+                        msgs.append(f"Win +${bet}")
+                        delta = bet
+                    elif pt < dealer_t:
+                        msgs.append(f"Lose −${bet}")
+                        delta = -bet
+                    else:
+                        msgs.append("Push 0")
+                        delta = 0
+            self.bankroll += delta
+        self.message = " | ".join(msgs)
+        self.phase = "done"
+
+    # --- Draws ---
+    def draw(self, surf):
+        surf.fill((14,70,50))
+        pygame.draw.rect(surf, TABLE_COLOR, (40,40, WIN_W-80, WIN_H-80), border_radius=28)
+        pygame.draw.rect(surf, GOLD, (40,40, WIN_W-80, WIN_H-80), 4, border_radius=28)
+        surf.blit(FONT_BIG.render("Blackjack", True, WHITE), (60, 50))
+        surf.blit(FONT_HUD.render(f"Bankroll: ${self.bankroll}", True, WHITE), (60, 95))
+        surf.blit(FONT_HUD.render(f"Bet: ${self.base_bet}", True, WHITE), (60, 125))
+
+        btns = {}
+        # Betting
+        if self.phase == "betting":
+            btns["-"] = draw_button(surf, (320, 118, 44, 36), "-")
+            btns["+"] = draw_button(surf, (372, 118, 44, 36), "+")
+            btns["deal"] = draw_button(surf, (426, 114, 120, 44), "Deal",
+                                       enabled=(self.base_bet>=MIN_BET and self.base_bet<=min(MAX_BET,self.bankroll)))
+            draw_center_text(surf, "Adjust your base bet, then Deal. [Esc to stand up]", (WIN_W//2, 160))
+        # Dealer
+        surf.blit(FONT_HUD.render("Dealer", True, WHITE), (60, 175))
+        self.draw_hand(surf, self.dealer, 140, 210, hide_first=(self.phase in ("player","dealing") and not self.revealed))
+        # Player hands
+        for i, h in enumerate(self.player_hands):
+            yrow = 360 + i*130
+            lab = f"You (Hand {i+1})"
+            if i == self.active_i and self.phase == "player":
+                lab += "  ← active"
+            surf.blit(FONT_HUD.render(lab, True, WHITE), (60, yrow-40))
+            self.draw_hand(surf, h["cards"], 140, yrow, hide_first=False)
+        # Buttons during player phase
+        if self.phase == "player":
+            h = self.player_hands[self.active_i]
+            btns["hit"] = draw_button(surf, (WIN_W-300, WIN_H-120, 90, 44), "Hit")
+            btns["stand"] = draw_button(surf, (WIN_W-200, WIN_H-120, 90, 44), "Stand")
+            can_d = self.can_double(h) and (self.bankroll >= 0)  # bankroll already deducted on double
+            can_s = self.can_split(h)
+            btns["double"] = draw_button(surf, (WIN_W-410, WIN_H-120, 100, 44), "Double", enabled=can_d)
+            btns["split"]  = draw_button(surf, (WIN_W-520, WIN_H-120, 100, 44), "Split", enabled=can_s)
+        elif self.phase == "done":
+            btns["next"] = draw_button(surf, (WIN_W-190, WIN_H-120, 140, 44), "Next Hand", enabled=(self.bankroll>0))
+            draw_center_text(surf, "[Esc to stand up]", (WIN_W//2, 160))
+        # Messages
+        if self.message:
+            color = GOLD if ("Win" in self.message or "Blackjack" in self.message) else WHITE
+            draw_center_text(surf, self.message, (WIN_W//2, 145), color=color)
+        return btns
+
+    def draw_hand(self, surf, cards, x0, y0, hide_first=False):
+        for i,(r,s) in enumerate(cards):
+            face = not(hide_first and i==0)
+            draw_card(surf, x0+i*(CARD_W+10), y0, r, s, face_up=face)
+        # anim previews
+        now = pygame.time.get_ticks()
+        for a in self.anim:
+            if now < a["t_start"]: continue
+            fx,fy = a["from"]; tx,ty = a["to"]
+            dt = (now - a["t_start"])/220.0
+            if dt<1.0:
+                x = fx+(tx-fx)*dt; y = fy+(ty-fy)*dt
+                draw_card(surf, int(x), int(y), a["card"][0], a["card"][1], face_up=False)
+
+    # --- Updates ---
+    def update(self):
+        if self.phase == "dealing":
+            self.update_deal_anim()
+        elif self.phase == "dealer":
+            self.revealed = True
+            self.dealer_play()
+            self.phase = "settle"
+        elif self.phase == "settle":
+            self.settle()
+
+    # --- Click handling ---
+    def click(self, pos, btns):
+        if self.phase == "betting":
+            if point_in_rect(pos, btns.get("-")): self.base_bet = max(MIN_BET, self.base_bet - MIN_BET)
+            elif point_in_rect(pos, btns.get("+")): self.base_bet = min(MAX_BET, min(self.bankroll, self.base_bet + MIN_BET))
+            elif point_in_rect(pos, btns.get("deal")):
+                if MIN_BET <= self.base_bet <= min(MAX_BET, self.bankroll):
+                    # take initial bet (we’ll return/settle later)
+                    self.bankroll -= self.base_bet
+                    self.start_hand()
+        elif self.phase == "player":
+            if point_in_rect(pos, btns.get("hit")): self.hit()
+            elif point_in_rect(pos, btns.get("stand")): self.stand()
+            elif point_in_rect(pos, btns.get("double")): self.double()
+            elif point_in_rect(pos, btns.get("split")): self.split()
+        elif self.phase == "done":
+            if self.bankroll > 0 and point_in_rect(pos, btns.get("next")):
+                self.message=""
+                self.player_hands=[]; self.dealer=[]; self.revealed=False
+                self.phase="betting"
+
+# ============ States ============
+STATE_WORLD = "world"
+STATE_CASINO = "casino"
+STATE_TABLE = "table"
+STATE_GAMEOVER = "gameover"
+
+# ============ Game Controller ============
+class Game:
+    def __init__(self):
+        # world player spawn near main road
+        self.player = Player((WORLD_W//3*TILE)+16, (WORLD_H//2*TILE)-48, PLAYER_SPRITE.get_width(), PLAYER_SPRITE.get_height(), PLAYER_SPRITE)
+        self.state = STATE_WORLD
+        self.camera_x = 0; self.camera_y = 0
+        self.table = BlackjackTable()
+        self.dialog_text = ""
+        self.dialog_timer = 0
+
+        # music
+        if MUSIC_ENABLED and os.path.exists(MUSIC_FILE):
+            try:
+                pygame.mixer.music.load(MUSIC_FILE)
+                pygame.mixer.music.set_volume(0.4)
+                pygame.mixer.music.play(-1)
+            except Exception:
+                pass
+
+    def world_update(self):
+        self.player.input_move()
+        self.player.move_and_collide(WORLD_MAP)
+        # camera
+        self.camera_x = int(self.player.x + self.player.w/2 - WIN_W/2)
+        self.camera_y = int(self.player.y + self.player.h/2 - WIN_H/2)
+        self.camera_x = max(0, min(self.camera_x, WORLD_W*TILE - WIN_W))
+        self.camera_y = max(0, min(self.camera_y, WORLD_H*TILE - WIN_H))
+        # NPCs
+        for npc in NPCS:
+            npc.think(WORLD_MAP)
+
+        if self.dialog_timer > 0:
+            self.dialog_timer -= 1
+
+    def world_event(self, ev):
+        if ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_e:
+                # interact: casino/shop/hotel doors or NPC talk
+                tx = self.player.rect.centerx//TILE
+                ty = self.player.rect.centery//TILE
+                tile = WORLD_MAP[ty][tx]
+                if tile == 'C':
+                    # enter casino
+                    INSIDE_PLAYER.x = (CASINO_W//2)*TILE
+                    INSIDE_PLAYER.y = (CASINO_H-3)*TILE
+                    self.state = STATE_CASINO
+                    return
+                elif tile in ('H','S','P'):
+                    self.dialog_text = {
+                        'H': "Hotel clerk: 'All rooms are… theoretically available.'",
+                        'S': "Shopkeeper: 'We’re out of stock, but rich in dreams.'",
+                        'P': "Plaque: 'In honor of improbable luck and certain losses.'",
+                    }[tile]
+                    self.dialog_timer = 300
+                    return
+                # Talk to nearest NPC within radius
+                nearest = None; best = 99999
+                for npc in NPCS:
+                    d = abs(npc.rect.centerx - self.player.rect.centerx) + abs(npc.rect.centery - self.player.rect.centery)
+                    if d < best:
+                        best = d; nearest = npc
+                if nearest and best < 80:
+                    self.dialog_text = nearest.talk()
+                    self.dialog_timer = 240
+
+    def casino_update(self):
+        INSIDE_PLAYER.input_move()
+        INSIDE_PLAYER.move_and_collide(CASINO_MAP)
+
+    def casino_event(self, ev):
+        if ev.type == pygame.KEYDOWN:
+            if ev.key == pygame.K_ESCAPE:
+                self.state = STATE_WORLD
+            elif ev.key == pygame.K_e:
+                # near table?
+                if self.near_inside_table(INSIDE_PLAYER):
+                    self.state = STATE_TABLE
+                elif self.near_inside_exit(INSIDE_PLAYER):
+                    self.state = STATE_WORLD
+
+    def table_update(self):
+        self.table.update()
+        if self.table.bankroll <= 0:
+            self.state = STATE_GAMEOVER
+
+    def table_event(self, ev):
+        if ev.type == pygame.KEYDOWN and ev.key == pygame.K_ESCAPE:
+            self.state = STATE_CASINO
+        if ev.type == pygame.MOUSEBUTTONDOWN and ev.button == 1:
+            btns = self.table.draw(screen)  # for geometry
+            self.table.click(pygame.mouse.get_pos(), btns)
+
+    def draw_world(self):
+        # tiles
+        for y in range(WORLD_H):
+            for x in range(WORLD_W):
+                ch = WORLD_MAP[y][x]
+                rx = x*TILE - self.camera_x
+                ry = y*TILE - self.camera_y
+                if ch == '#': pygame.draw.rect(screen, WALL, (rx,ry,TILE,TILE))
+                elif ch == '.': pygame.draw.rect(screen, ROAD, (rx,ry,TILE,TILE))
+                elif ch == '=': pygame.draw.rect(screen, WATER, (rx,ry,TILE,TILE))
+                elif ch == '~': pygame.draw.rect(screen, SAND, (rx,ry,TILE,TILE))
+                elif ch == 'C':
+                    pygame.draw.rect(screen, WALL, (rx,ry,TILE,TILE))
+                    pygame.draw.rect(screen, NEON, (rx+4,ry+6,TILE-8,TILE-12), 2)
+                elif ch in ('H','S','P'):
+                    pygame.draw.rect(screen, WALL, (rx,ry,TILE,TILE))
+                    draw = {'H':'H','S':'$','P':'★'}[ch]
+                    screen.blit(FONT_SMALL.render(draw, True, GOLD), (rx+10, ry+8))
+                else: pygame.draw.rect(screen, GRASS, (rx,ry,TILE,TILE))
+
+        # NPCs
+        for npc in NPCS:
+            npc.draw(screen, self.camera_x, self.camera_y)
+
+        # Player
+        self.player.draw(screen, self.camera_x, self.camera_y)
+
+        # HUD / hint
+        screen.blit(FONT_HUD.render("Move: WASD/Arrows · Interact: E · Stand up/Back: Esc · Casino: find neon door 'C'", True, WHITE), (12, 8))
+
+        # dialog
+        if self.dialog_timer > 0 and self.dialog_text:
+            pygame.draw.rect(screen, (0,0,0,160), (0, WIN_H-80, WIN_W, 80))
+            pygame.draw.rect(screen, WHITE, (10, WIN_H-74, WIN_W-20, 64), 2, border_radius=10)
+            screen.blit(FONT.render(self.dialog_text, True, WHITE), (24, WIN_H-56))
+
+    def draw_casino(self):
+        offx = (WIN_W - CASINO_W*TILE)//2
+        offy = (WIN_H - CASINO_H*TILE)//2
+        for y in range(CASINO_H):
+            for x in range(CASINO_W):
+                ch = CASINO_MAP[y][x]
+                px, py = offx + x*TILE, offy + y*TILE
+                if ch=='#': pygame.draw.rect(screen, WALL, (px,py,TILE,TILE))
+                else: pygame.draw.rect(screen, FLOOR, (px,py,TILE,TILE))
+                if ch=='T':
+                    pygame.draw.ellipse(screen, (90,180,120), (px-24,py-14, TILE+48, TILE+28), 3)
+                if y==CASINO_H-1 and x==CASINO_W//2:
+                    pygame.draw.rect(screen, ROAD, (px,py,TILE,TILE))
+        # player
+        screen.blit(FONT_HUD.render("Inside Casino: walk to a glowing table [E] to sit. Exit at bottom. [Esc to leave]", True, WHITE), (offx+8, offy+8))
+        screen.blit(PLAYER_SPRITE, (offx + INSIDE_PLAYER.x, offy + INSIDE_PLAYER.y))
+
+    def draw_table(self):
+        self.table.draw(screen)
+
+    def draw_gameover(self):
+        screen.fill(BG_COLOR)
+        draw_center_text(screen, "You went broke. GAME OVER", (WIN_W//2, WIN_H//2-16), color=RED)
+        draw_center_text(screen, "Press R to respawn outside", (WIN_W//2, WIN_H//2+18))
+
+    # helpers
+    def near_inside_exit(self, actor):
+        return actor.rect.centery//TILE >= CASINO_H-2 and abs(actor.rect.centerx//TILE - CASINO_W//2) <= 1
+
+    def near_inside_table(self, actor):
+        tx, ty = actor.rect.centerx//TILE, actor.rect.centery//TILE
+        return CASINO_MAP[ty][tx] == 'T'
+
+    def run(self):
+        while True:
+            for ev in pygame.event.get():
+                if ev.type == pygame.QUIT:
+                    pygame.quit(); sys.exit(0)
+                if self.state == STATE_WORLD:
+                    self.world_event(ev)
+                    if ev.type == pygame.KEYDOWN and ev.key == pygame.K_r:
+                        self.__init__()
+                elif self.state == STATE_CASINO:
+                    self.casino_event(ev)
+                elif self.state == STATE_TABLE:
+                    self.table_event(ev)
+                elif self.state == STATE_GAMEOVER:
+                    if ev.type == pygame.KEYDOWN and ev.key == pygame.K_r:
+                        self.__init__()
+
+            # update
+            if self.state == STATE_WORLD: self.world_update()
+            elif self.state == STATE_CASINO: self.casino_update()
+            elif self.state == STATE_TABLE: self.table_update()
+
+            # draw
+            if self.state == STATE_WORLD: self.draw_world()
+            elif self.state == STATE_CASINO: self.draw_casino()
+            elif self.state == STATE_TABLE: self.draw_table()
+            elif self.state == STATE_GAMEOVER: self.draw_gameover()
+
+            pygame.display.flip()
+            clock.tick(FPS)
+
+# ============ Run ============
+if __name__ == "__main__":
+    Game().run()
