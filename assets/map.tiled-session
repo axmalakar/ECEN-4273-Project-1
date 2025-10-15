@@ -1,0 +1,101 @@
+{
+    "Map/SizeTest": {
+        "height": 4300,
+        "width": 2
+    },
+    "activeFile": "005.tsx",
+    "expandedProjectPaths": [
+        "."
+    ],
+    "file.lastUsedOpenFilter": "All Files (*)",
+    "fileStates": {
+        "": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "000.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "005.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "021.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "2D_TILSET_UPDATE.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "2D_TopDown_Tileset_Casino_1024x512 (2).tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1
+        },
+        "2D_TopDown_Tileset_Casino_1024x512.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1.5
+        },
+        "2D_TopDown_Tileset_Casino_640x512.tsx": {
+            "scaleInDock": 1,
+            "scaleInEditor": 1.5
+        },
+        ":/automap-tiles.tsx": {
+            "scaleInDock": 1
+        },
+        "map.tmx": {
+            "scale": 0.75,
+            "selectedLayer": -1,
+            "viewCenter": {
+                "x": 529.3333333333333,
+                "y": 426.6666666666667
+            }
+        },
+        "map1.tmx": {
+            "scale": 2,
+            "selectedLayer": 5,
+            "viewCenter": {
+                "x": 256,
+                "y": 187.75
+            }
+        }
+    },
+    "last.externalTilesetPath": "C:/Users/axmal/OneDrive - Oklahoma A and M System/2025 Fall/Software Engineering/ECEN-4273-Project-1/assets",
+    "last.imagePath": "C:/Users/axmal/OneDrive - Oklahoma A and M System/2025 Fall/Software Engineering/ECEN-4273-Project-1/assets/2D Top Down Pixel Art Characters",
+    "last.worldFilePath": "C:/Users/axmal/OneDrive - Oklahoma A and M System/2025 Fall/Software Engineering/ECEN-4273-Project-1/assets",
+    "loadedWorlds": [
+        "C:/Users/axmal/OneDrive - Oklahoma A and M System/2025 Fall/Software Engineering/ECEN-4273-Project-1/assets/map.world",
+        "C:/Users/axmal/OneDrive - Oklahoma A and M System/2025 Fall/Software Engineering/ECEN-4273-Project-1/assets/map.world"
+    ],
+    "map.height": 24,
+    "map.lastUsedFormat": "tmx",
+    "map.tileHeight": 16,
+    "map.tileWidth": 16,
+    "map.width": 32,
+    "openFiles": [
+        "2D_TILSET_UPDATE.tsx",
+        "map1.tmx",
+        "005.tsx",
+        "021.tsx"
+    ],
+    "project": "map.tiled-project",
+    "property.type": "bool",
+    "recentFiles": [
+        "2D_TILSET_UPDATE.tsx",
+        "map1.tmx",
+        "021.tsx",
+        "005.tsx",
+        "000.tsx",
+        "map.tmx",
+        "2D_TopDown_Tileset_Casino_640x512.tsx",
+        "2D_TopDown_Tileset_Casino_1024x512 (2).tsx",
+        "2D_TopDown_Tileset_Casino_1024x512.tsx"
+    ],
+    "tileset.lastUsedFilter": "Tiled tileset files (*.tsx *.xml)",
+    "tileset.lastUsedFormat": "tsx",
+    "tileset.tileSize": {
+        "height": 32,
+        "width": 20
+    }
+}
